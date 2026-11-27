@@ -18,7 +18,6 @@ from typing import Any
 from hospitality.modules.memos import api as memos_api
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.platform.staff_confirm import ConfirmationMethod, ProofStatus
 from hospitality.staff_portal import memos_search
 from hospitality.staff_portal import memos_texts as texts
 from hospitality.staff_portal.checkin import format_local
@@ -26,6 +25,7 @@ from hospitality.staff_portal.memos import (
     base_path,
     card_href,
     confirm_context,
+    confirmation_line,
     demand_href,
     tabs_context,
 )
@@ -72,18 +72,20 @@ def list_rows(
 
 
 def receipt_line(card: memos_api.DemandCard, zone: tzinfo) -> str | None:
-    """«Получение: подтверждено …» — способ теми же словами, что у листа подписей (§9)."""
+    """«Получение: подтверждено …» — теми же словами, что строка листа подписей (§9, §4),
+    и с теми же особыми случаями сброса пароля: от получения идёт срок (#1201)."""
     if card.received_at is None or card.received_method is None:
         return None
-    when = format_local(card.received_at, zone)
-    if card.received_method is ConfirmationMethod.PASSWORD:
-        method = texts.BY_PASSWORD.format(when=when)
-    elif card.received_proof_status is ProofStatus.DISOWNED:
-        method = texts.BY_DISOWNED.format(when=when)
-    elif card.received_proof_status is ProofStatus.VERIFIED:
-        method = texts.BY_DEVICE.format(when=when)
-    else:
-        method = texts.RECEIPT_MISMATCH.format(when=when)
+    method = confirmation_line(
+        card.received_at,
+        card.received_method,
+        card.received_proof_status,
+        password_reset_at=card.received_password_reset_at,
+        key_reset_revoked_at=card.received_key_reset_revoked_at,
+        key_bound_after_reset_at=card.received_key_bound_after_reset_at,
+        mismatch=texts.RECEIPT_MISMATCH,
+        zone=zone,
+    )
     return texts.RECEIVED_LINE.format(method=method)
 
 
@@ -126,6 +128,15 @@ async def page_context(staff: StaffContext, demand_id: uuid.UUID, zone: tzinfo) 
         "receipt": receipt_line(card, zone),
         "can_receive": employee and card.state is State.AWAITING_RECEIPT,
         "receive_button": texts.RECEIVE_BUTTON,
+        # Отозвать — затребовавшему до «Получил(а)»; право проверяет модуль ещё раз.
+        "can_cancel": card.demanded_by_id == staff.user_id and card.state is State.AWAITING_RECEIPT,
+        "cancel_button": texts.CANCEL_DEMAND_BUTTON,
+        "cancel_confirm": texts.CANCEL_DEMAND_CONFIRM,
+        "api": f"/staff/{staff.tenant_slug}/api/memos/demands",
+        "cancel_messages": {
+            "changed": texts.MESSAGES["changed"],
+            "failed": texts.MESSAGES["failed"],
+        },
         "write_href": f"{path}/explanations/new?demand={card.id}" if can_write else None,
         "write_button": texts.WRITE_EXPLANATION,
         "explanations": [

@@ -17,6 +17,7 @@ from hospitality.modules.memos.access import (
 from hospitality.modules.memos.deadline import explanation_due
 from hospitality.modules.memos.demands import (
     begin_receipt,
+    cancel_demand,
     confirm_receipt,
     create_demand,
     get_demand,
@@ -119,6 +120,7 @@ __all__ = [
     "ViewRead",
     "begin_action",
     "begin_receipt",
+    "cancel_demand",
     "complete_action",
     "confirm_receipt",
     "create_based_on",

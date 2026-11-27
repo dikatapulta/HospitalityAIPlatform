@@ -1,5 +1,6 @@
 """Требование объяснения (spec 0077 §6, §12 PR 5): фото, «Получил(а)» только сотруднику,
-срок по поясу отеля, права старшего — только свои службы, фото уходит с требованием."""
+срок по поясу отеля, права старшего — только свои службы, фото уходит с требованием;
+отзыв до получения — только затребовавшему, с фото; строка получения несёт сброс пароля."""
 
 from __future__ import annotations
 
@@ -18,9 +19,12 @@ from hospitality.platform import files
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.platform.staff_confirm import ConfirmationMethod, ProofStatus
+from hospitality.platform.staff_password_reset import accept_password_reset
+from hospitality.platform.staff_superadmin import issue_password_reset
 from hospitality.platform.staff_team import change_member_access
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
+from hospitality.shared.ports.file_storage import get_file_storage
 from hospitality.shared.tenancy import tenant_context
 from tests.passkey_authenticator import SoftAuthenticator
 from tests.test_file_content import make_png
@@ -241,3 +245,86 @@ async def _row(hotel: Hotel, demand_id: uuid.UUID) -> MemoDemand:
             row = await session.scalar(select(MemoDemand).where(MemoDemand.id == demand_id))
             assert row is not None
             return row
+
+
+async def test_demander_cancels_before_receipt_with_photo(hotel: Hotel) -> None:
+    """Ошибся сотрудником — «Отозвать требование»: только затребовавшему и до «Получил(а)»;
+    требование уходит из «Ждут меня» сотрудника вместе с фото, «Получил(а)» по нему — 404."""
+    demand_id = await demand(hotel)
+    file_id = (await _row(hotel, demand_id)).file_id
+    with tenant_context(hotel.tenant_id):
+        for stranger in (hotel.author, hotel.other_manager, hotel.outsider):
+            assert await _code(memos_api.cancel_demand(stranger, demand_id)) == "ERR-MEMO-001"
+        assert await memos_api.cancel_demand(hotel.boss, demand_id) == hotel.author.user_id
+        assert await _code(memos_api.get_demand(hotel.boss, demand_id)) == "ERR-MEMO-001"
+        assert await _code(memos_api.begin_receipt(hotel.author, demand_id)) == "ERR-MEMO-001"
+        assert await _code(memos_api.cancel_demand(hotel.boss, demand_id)) == "ERR-MEMO-001"
+        assert await _code(files.read_file(file_id)) == "ERR-FILES-004"
+    assert await _box(hotel, hotel.author, memos_api.MemoBox.WAITING) == []
+    assert await _box(hotel, hotel.boss, memos_api.MemoBox.ALL) == []
+
+
+async def test_received_demand_cannot_be_cancelled(hotel: Hotel) -> None:
+    """После «Получил(а)» идёт срок — отзыва нет (ERR-MEMO-002), требование и фото целы."""
+    demand_id = await demand(hotel)
+    await receive(hotel, hotel.author, demand_id)
+    with tenant_context(hotel.tenant_id):
+        assert await _code(memos_api.cancel_demand(hotel.boss, demand_id)) == "ERR-MEMO-002"
+        assert (await memos_api.read_demand_photo(hotel.boss, demand_id)).data
+    assert (await _card(hotel, hotel.author, demand_id)).state is State.OPEN
+
+
+async def test_cancel_keeps_demand_whole_when_storage_fails(
+    hotel: Hotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Хранилище не удалило фото — ERR-FILES-006, требование остаётся с фото; повтор доделывает."""
+    demand_id = await demand(hotel)
+    storage = get_file_storage()
+    real_delete = storage.delete
+
+    async def broken(key: str) -> None:
+        raise OSError("disk")
+
+    monkeypatch.setattr(storage, "delete", broken)
+    with tenant_context(hotel.tenant_id):
+        assert await _code(memos_api.cancel_demand(hotel.boss, demand_id)) == "ERR-FILES-006"
+        assert (await memos_api.read_demand_photo(hotel.author, demand_id)).data
+    assert await _box(hotel, hotel.author, memos_api.MemoBox.WAITING) == [demand_id]
+    monkeypatch.setattr(storage, "delete", real_delete)
+    with tenant_context(hotel.tenant_id):
+        await memos_api.cancel_demand(hotel.boss, demand_id)
+    assert await _box(hotel, hotel.author, memos_api.MemoBox.WAITING) == []
+
+
+async def _reset_password(hotel: Hotel, staff: StaffContext, password: str) -> None:
+    grant = await issue_password_reset(
+        staff.user_id, hotel.tenant_id, actor_user_id=hotel.boss.user_id
+    )
+    await accept_password_reset(grant.reset_token, password=password)
+
+
+async def test_receipt_carries_password_reset_like_signature_sheet(hotel: Hotel) -> None:
+    """Сбросить пароль сотрудника мог руководитель — карточка требования называет это, как
+    строка листа подписей (§4): ключ погашен сбросом после получения; пароль получения
+    задан по ссылке сброса."""
+    by_key = await demand(hotel)
+    await receive(hotel, hotel.author, by_key, device=hotel.author_device)
+    assert (await _card(hotel, hotel.boss, by_key)).received_key_reset_revoked_at is None
+    new_password = "new-horse-battery-staple"
+    await _reset_password(hotel, hotel.author, new_password)
+    card = await _card(hotel, hotel.boss, by_key)
+    assert card.received_proof_status is ProofStatus.VERIFIED
+    assert card.received_key_reset_revoked_at is not None
+    assert card.received_password_reset_at is None
+
+    by_password = await demand(hotel)
+    with tenant_context(hotel.tenant_id):
+        request = await memos_api.begin_receipt(hotel.author, by_password)
+        answer = memos_api.PasswordAnswer(
+            challenge_id=request.challenge_id, password=new_password, client_ip="ip-memos"
+        )
+        await memos_api.confirm_receipt(hotel.author, by_password, answer)
+    card = await _card(hotel, hotel.boss, by_password)
+    assert card.received_method is ConfirmationMethod.PASSWORD
+    assert card.received_password_reset_at is not None
+    assert card.received_password_reset_at <= (card.received_at or utc_now())

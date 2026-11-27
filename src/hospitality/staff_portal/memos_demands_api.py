@@ -7,6 +7,9 @@
 служб, иначе ERR-PLATFORM-002 `not_your_service`); файл — `platform/files.py` назначением
 `memo_demand` (ERR-FILES-001…003). После записи — пуш сотруднику (§9, без имён).
 
+«Отозвать требование» — затребовавшему до «Получил(а)» (#1201): POST без окна подтверждения,
+как «Отозвать» у записки; пуш сотруднику об отзыве.
+
 «Получил(а)» — окно подтверждения, как подпись в листе (`memo_confirm.js` зовёт
 `…/demands/{id}/begin` и `…/complete`): `begin_receipt` / `confirm_receipt` модуля —
 только сотруднику, один раз, с образцом подписи. В логах — только id.
@@ -141,6 +144,27 @@ async def _actor(request: Request) -> StaffContext:
     staff = await memos.any_role(request)
     await memos.require_section(staff)
     return staff
+
+
+@router.post("/{demand_id:uuid}/cancel", summary="Отозвать требование до «Получил(а)»")
+async def cancel(
+    request: Request, demand_id: uuid.UUID, background: BackgroundTasks
+) -> dict[str, str]:
+    """Затребовавшему, пока сотрудник не подтвердил получение (#1201): требование и фото
+    удаляются, сотруднику — пуш об отзыве с той же меткой, что у пуша о вручении: он его
+    заменяет. Право и статус — модуль (`cancel_demand`)."""
+    staff = await _actor(request)
+    employee_id = await memos_api.cancel_demand(staff, demand_id)
+    path = memos.base_path(staff.tenant_slug)
+    background.add_task(
+        memos_push.notify,
+        staff.tenant_id,
+        demand_id,
+        [employee_id],
+        texts.PUSH_DEMAND_CANCELLED,
+        url=f"{path}/waiting",
+    )
+    return {"href": f"{path}/mine"}
 
 
 @router.post("/{demand_id:uuid}/begin", summary="«Получил(а)»: окно подтверждения")

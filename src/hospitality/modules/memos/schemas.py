@@ -310,4 +310,8 @@ class DemandCard(DemandSummary):
     received_method: ConfirmationMethod | None
     # Сходится ли доказательство получения (как у строки листа подписей).
     received_proof_status: ProofStatus | None
+    # Особые случаи сброса пароля — как у строки листа (`SignatureRead`, §4).
+    received_password_reset_at: datetime | None = None
+    received_key_reset_revoked_at: datetime | None = None
+    received_key_bound_after_reset_at: datetime | None = None
     explanations: list[DemandExplanation]
