@@ -28,11 +28,11 @@
 | `unclaimed.py` | `list_flagged_unclaimed_requests` — невзятые с признаком, который зовёт шире службы, срочные и эскалации первыми (#971: вторая выборка сигнала кабинета). Отдельным файлом по той же причине |
 | `photos.py` | `attach_request_photos`, `list_request_photo_ids`, `list_attached_file_ids`, `read_request_photo`; `MAX_REQUEST_PHOTOS`, `ERR_REQUESTS_PHOTO_NOT_FOUND` — фото гостя к заявке ([spec 0081](../../../../docs/specs/0081-guest-request-photo.md) §5). Отдельным файлом по той же причине |
 | `remainder.py` | `complete_with_remainder` — «Готово» с остатком: закрытие исходной и заявка на остаток одной транзакцией ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md) §2.1, #58). Отдельным файлом по той же причине; общие куски с `service.py` — `_apply_status_change` и `_insert_request` (тело перехода и вставки в сессии вызывающего) |
-| `reopen.py` | `reopen_request`, `can_reopen`, `REOPEN_WINDOW` — «Вернуть в работу» выполненную: `done → in_progress` в течение суток после закрытия ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2). Отдельным файлом по той же причине |
+| `reopen.py` | `reopen_request`, `can_reopen`, `reopen_allowed`, `list_remainder_parent_ids`, `REOPEN_WINDOW`, `MAX_REOPENS` — «Вернуть в работу» выполненную: `done → in_progress` в течение суток после закрытия, не больше двух раз и не закрытие с остатком ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2, #1183). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3), исходную заявку остатка `parent_request_id` (spec 0079), число возвратов в работу `reopen_count` (spec 0080); `RemainderOutcome` — итог «Готово» с остатком. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), числа листа «Отчёт» за период (`test_period_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`), «Вернуть в работу» — снятые метки закрытия, событие и журнал, сутки, заявка формы, только `done`, устаревшее «Взять», итоги по сотруднику (`test_reopen.py`), фото к заявке — предел пять и гонка, закрытая, повтор, чужой файл и назначение, каскад удаления файла, RLS, граница службы при чтении (`test_photos.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), числа листа «Отчёт» за период (`test_period_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`), «Вернуть в работу» — снятые метки закрытия, событие и журнал, сутки, заявка формы, только `done`, устаревшее «Взять», итоги по сотруднику, третий возврат и закрытие с остатком — отказ, остатки чужого отеля не видны (`test_reopen.py`), фото к заявке — предел пять и гонка, закрытая, повтор, чужой файл и назначение, каскад удаления файла, RLS, граница службы при чтении (`test_photos.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -155,12 +155,17 @@
   Публикует `request.status_changed` (`done → in_progress`, `initiator` как передан);
   с `acting_user` — строка журнала `request_reopened` той же транзакцией. Отказы под
   блокировкой строки: чужая служба — `ERR-REQUESTS-007` (403) раньше прочих; не `done` —
-  `ERR-REQUESTS-003` (409); `origin` `showroom_form` (запрос с витрины, вне #998) или
-  прошли сутки — `ERR-REQUESTS-009` (409). Заявки форм гостя (`guest_form` — заказ, бронь,
-  АВР) возвращаются: поправку гостю шлют их подписчики, ответ брони снимает
-  `table_booking` (#998, spec 0080 §2.3). Остаток, заведённый закрытием (spec 0079), остаётся своей
-  заявкой. `can_reopen(request, now=None) -> bool` — то же правило без записи: по нему
-  кабинет и чат службы рисуют кнопку.
+  `ERR-REQUESTS-003` (409); `origin` `showroom_form` (запрос с витрины, вне #998), прошли
+  сутки, возвратов уже `MAX_REOPENS` (2) или закрытие завело остаток (spec 0079; ищется по
+  `parent_request_id` в той же транзакции) — `ERR-REQUESTS-009` (409, #1183: круг «Готово ↔
+  Вернуть в работу» заводил остатки мимо ограды #971 и слал гостю поправки без конца).
+  Заявки форм гостя (`guest_form` — заказ, бронь, АВР) возвращаются: поправку гостю шлют их
+  подписчики, ответ брони снимает `table_booking` (#998, spec 0080 §2.3).
+  `can_reopen(request, now=None, *, has_remainder) -> bool` — то же правило без записи: по нему
+  кабинет и чат службы рисуют кнопку; `has_remainder` обязателен — остатка нет в строке
+  заявки. Ленте — `list_remainder_parent_ids(request_ids) -> frozenset[UUID]` (какие завели
+  остаток, одним запросом), одной заявке — `reopen_allowed(request, now=None) -> bool`
+  (остаток спрашивается, только когда остальное правило «да»).
 - `transfer_request(request_id, category_id, *, acting_user=None) ->
   ServiceRequestRead` — передать открытую заявку в другую службу (spec 0042
   §2.2). Взятая заодно возвращается в очередь новой службы (обнуление пары
@@ -401,7 +406,7 @@ new ⇄ in_progress ⇄ done
 `done → in_progress` — «вернуть в работу» (spec 0080): «Готово» нажали не на той
 заявке. Единственное ребро из терминального статуса — не в `STATUS_TRANSITIONS`, а
 `REOPEN_TRANSITION` рядом с ней и свой вход `reopen_request`: сутки после закрытия,
-не заявка формы. Общий `change_request_status` закрытую по-прежнему не воскрешает —
+не запрос с витрины, не больше `MAX_REOPENS` раз и не закрытие с остатком. Общий `change_request_status` закрытую по-прежнему не воскрешает —
 устаревшая кнопка «Взять» под ней получает `ERR-REQUESTS-003`.
 
 Статуса `assigned` больше нет (ADR-013, issue #75): персонал пилота не различал

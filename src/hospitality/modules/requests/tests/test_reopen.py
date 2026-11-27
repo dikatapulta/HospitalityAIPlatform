@@ -4,7 +4,8 @@
 взятие остаётся, растёт `reopen_count`, событие и строка журнала — одной
 транзакцией. Запрос с витрины, прошедшие сутки, не выполненная, чужая служба — отказ
 без записи; заявка формы гостя (заказ, бронь, АВР) возвращается (#998). Общая карта
-переходов закрытую по-прежнему не воскрешает.
+переходов закрытую по-прежнему не воскрешает. Круг «Готово ↔ Вернуть в работу» (#1183):
+третий возврат и закрытие с остатком — отказ, круг не заводит второго остатка.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from hospitality.modules.requests.api import (
     ERR_REQUESTS_FOREIGN_SERVICE,
     ERR_REQUESTS_INVALID_STATUS_TRANSITION,
     ERR_REQUESTS_REOPEN_NOT_ALLOWED,
+    MAX_REOPENS,
     REOPEN_WINDOW,
     CancelReason,
     RequestStatus,
@@ -29,11 +31,15 @@ from hospitality.modules.requests.api import (
     StaffStatsRow,
     can_reopen,
     change_request_status,
+    complete_with_remainder,
     create_request,
     get_request,
+    list_remainder_parent_ids,
+    reopen_allowed,
     reopen_request,
     staff_stats,
 )
+from hospitality.modules.requests.models import ServiceRequest
 from hospitality.modules.requests.tests.conftest import make_acting_user, make_category
 from hospitality.platform.models import StaffAction, StaffActionLog
 from hospitality.platform.staff_actions import StaffActor
@@ -230,13 +236,83 @@ async def test_can_reopen_is_the_same_rule(
     assert closed.closed_at is not None
     now = utc_now()
 
-    assert can_reopen(closed, now) is True
-    assert can_reopen(closed, closed.closed_at + REOPEN_WINDOW - timedelta(seconds=1)) is True
-    assert can_reopen(closed, closed.closed_at + REOPEN_WINDOW) is False
-    assert can_reopen(form, now) is True
-    assert can_reopen(showroom, now) is False
-    assert can_reopen(closed.model_copy(update={"status": RequestStatus.IN_PROGRESS})) is False
-    assert can_reopen(closed.model_copy(update={"closed_at": None})) is False
+    window_end = closed.closed_at + REOPEN_WINDOW
+    in_progress = closed.model_copy(update={"status": RequestStatus.IN_PROGRESS})
+
+    assert can_reopen(closed, now, has_remainder=False) is True
+    assert can_reopen(closed, window_end - timedelta(seconds=1), has_remainder=False) is True
+    assert can_reopen(closed, window_end, has_remainder=False) is False
+    assert can_reopen(form, now, has_remainder=False) is True
+    assert can_reopen(showroom, now, has_remainder=False) is False
+    assert can_reopen(in_progress, has_remainder=False) is False
+    assert can_reopen(closed.model_copy(update={"closed_at": None}), has_remainder=False) is False
+    # #1183: потолок возвратов и остаток.
+    assert can_reopen(closed, now, has_remainder=True) is False
+    ceiling = closed.model_copy(update={"reopen_count": MAX_REOPENS})
+    assert can_reopen(ceiling, now, has_remainder=False) is False
+    with tenant_context(tenant_a):
+        assert await reopen_allowed(closed) is True
+        assert await reopen_allowed(ceiling) is False
+
+
+async def test_third_reopen_is_refused(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    """Потолок (#1183): промах и второй промах — живой случай, третий возврат — круг."""
+    tenant_a, _ = two_tenants
+    closed = await _done(tenant_a)
+
+    with tenant_context(tenant_a):
+        for _ in range(MAX_REOPENS):
+            await reopen_request(closed.id)
+            last = await change_request_status(closed.id, RequestStatus.DONE, resolution_note=_NOTE)
+        with pytest.raises(AppError) as refused:
+            await reopen_request(closed.id)
+        stored = await get_request(closed.id)
+
+    assert last.reopen_count == MAX_REOPENS
+    assert refused.value.code == ERR_REQUESTS_REOPEN_NOT_ALLOWED
+    assert refused.value.status_code == 409
+    assert (stored.status, stored.reopen_count) == (RequestStatus.DONE, MAX_REOPENS)
+
+
+async def test_close_with_remainder_is_not_reopened(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Готово с остатком» не возвращается (#1183): круг «остаток ↔ возврат» заводил
+    невзятые заявки мимо ограды ручного ввода (#971) — теперь остаток один."""
+    tenant_a, tenant_b = two_tenants
+    category = await make_category(tenant_a, key="housekeeping")
+    with tenant_context(tenant_a):
+        created = await create_request(
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="полотенца",
+                room_number="305",
+            )
+        )
+        await change_request_status(created.id, RequestStatus.IN_PROGRESS)
+        outcome = await complete_with_remainder(created.id, resolution_note=_NOTE)
+        with pytest.raises(AppError) as refused:
+            await reopen_request(created.id)
+        stored = await get_request(created.id)
+        parents = await list_remainder_parent_ids([created.id, outcome.remainder.id])
+        allowed = await reopen_allowed(outcome.closed)
+        async with session_scope() as session:
+            remainders = list(
+                await session.scalars(
+                    select(ServiceRequest.id).where(ServiceRequest.parent_request_id == created.id)
+                )
+            )
+    with tenant_context(tenant_b):
+        foreign = await list_remainder_parent_ids([created.id])
+
+    assert refused.value.code == ERR_REQUESTS_REOPEN_NOT_ALLOWED
+    assert (stored.status, stored.reopen_count) == (RequestStatus.DONE, 0)
+    assert parents == frozenset({created.id})
+    assert allowed is False
+    assert remainders == [outcome.remainder.id]
+    assert foreign == frozenset()  # RLS: остатки чужого отеля не видны
+    assert await list_remainder_parent_ids([]) == frozenset()
 
 
 async def test_reopened_done_is_not_counted_for_the_one_who_closed_it(

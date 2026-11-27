@@ -3,7 +3,9 @@
 Выполненная заявка во вкладке «Закрытые» несёт кнопку возврата, `POST …/reopen`
 возвращает её в работу со строкой журнала. Ответ «Готово» говорит странице, дать ли
 «Отменить» во всплывашке: запросу с витрины и закрытию с остатком — нет. Отказ домена —
-409 `ERR-REQUESTS-009`. Карточки заказа и брони — `test_orders.py`, `test_bookings.py` (#998).
+409 `ERR-REQUESTS-009`. Закрытию с остатком и заявке, дважды возвращённой, кнопки нет
+(#1183); предел учётки — `test_entry_flood.py`. Карточки заказа и брони — `test_orders.py`,
+`test_bookings.py` (#998).
 """
 
 from __future__ import annotations
@@ -95,3 +97,27 @@ async def test_close_with_remainder_offers_no_undo(
 
     assert response.status_code == 200
     assert response.json()["can_reopen"] is False
+    # Ни кнопки в «Закрытых», ни возврата в обход неё (#1183).
+    closed_tab = await client.get(f"/staff/{HOTEL_SLUG}/requests?tab=closed")
+    assert 'data-action="reopen"' not in closed_tab.text
+    refused = await _post(client, request_id, "reopen", {})
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == requests_api.ERR_REQUESTS_REOPEN_NOT_ALLOWED
+
+
+async def test_twice_reopened_request_gets_no_third_reopen(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    request_id = await _claimed(client, portal_hotel)
+    for _ in range(requests_api.MAX_REOPENS):
+        assert (await _post(client, request_id, "complete", {})).json()["can_reopen"] is True
+        assert (await _post(client, request_id, "reopen", {})).status_code == 200
+
+    last = await _post(client, request_id, "complete", {"note": "окно не помыто"})
+
+    assert last.json()["can_reopen"] is False
+    closed_tab = await client.get(f"/staff/{HOTEL_SLUG}/requests?tab=closed")
+    assert 'data-action="reopen"' not in closed_tab.text
+    refused = await _post(client, request_id, "reopen", {})
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == requests_api.ERR_REQUESTS_REOPEN_NOT_ALLOWED
