@@ -11,6 +11,7 @@ Outlook настоящий — `get_extension_outlook` по Fake-адаптер�
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import timedelta
 
@@ -80,7 +81,8 @@ async def test_block_sits_after_room_and_before_requests_and_language(
     ]
     assert order == sorted(order)
     full_night = departure + timedelta(days=1)
-    assert f"Nights with NO free rooms: {full_night.day}–" in system
+    # Ночь на стыке месяцев — «30 November–1 December»: после дня пробел, а не «–».
+    assert re.search(rf"Nights with NO free rooms: {full_night.day}[– ]", system)
 
 
 async def test_no_block_without_stay_binding(pms: FakePmsAdapter, hotel: uuid.UUID) -> None:
