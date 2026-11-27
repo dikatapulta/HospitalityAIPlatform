@@ -12,6 +12,7 @@
 Раздел «Гости спрашивали, а ответа не было» (§7 п. 3, issue #334) — только
 чтение: строки `unanswered_questions` пишет канал, читает их владелец таблицы
 (`channels/common/unanswered_questions.py`), а окно и предел задаёт страница.
+Выключатель `ENABLE_UNANSWERED_QUESTIONS` выключен — раздела на странице нет (#1161).
 """
 
 from __future__ import annotations
@@ -20,7 +21,10 @@ from collections.abc import Callable
 from datetime import UTC, date, timedelta
 from typing import Any, Final
 
-from hospitality.channels.common.unanswered_questions import list_unanswered_questions
+from hospitality.channels.common.unanswered_questions import (
+    list_unanswered_questions,
+    recording_enabled,
+)
 from hospitality.platform.config import (
     HOTEL_FACT_LINE_BREAK,
     MAX_HOTEL_FACT_ANSWER_LENGTH,
@@ -196,8 +200,13 @@ async def build_knowledge_context(staff: StaffContext) -> dict[str, Any]:
     config = await queue.tenant_config(staff)
     facts = list(config.hotel_facts) if config is not None else []
     today = hotel_today(config) if config is not None else utc_now().date()
-    questions = await list_unanswered_questions(
-        created_after=utc_now() - UNANSWERED_WINDOW, limit=UNANSWERED_LIMIT
+    show_unanswered = recording_enabled()
+    questions = (
+        await list_unanswered_questions(
+            created_after=utc_now() - UNANSWERED_WINDOW, limit=UNANSWERED_LIMIT
+        )
+        if show_unanswered
+        else []
     )
     tz = config.tzinfo if config is not None else UTC
     return {
@@ -213,6 +222,7 @@ async def build_knowledge_context(staff: StaffContext) -> dict[str, Any]:
             # родительный падеж верен при любом числе, склонять не нужно.
             f"{len(facts)} из {MAX_HOTEL_FACTS} фактов"
         ),
+        "show_unanswered": show_unanswered,
         # Дата — по поясу отеля (FOUNDATION §9): вопрос в 01:00 по Алматы
         # иначе встал бы вчерашним числом.
         "unanswered": [

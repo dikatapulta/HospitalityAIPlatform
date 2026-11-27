@@ -1,5 +1,6 @@
 {# Справочник отеля (spec 0036 §7, §8.1; issue #335): факты в порядке хранения,
-   счётчик бюджета, форма добавления и вопросы гостей без ответа (§7 п. 3, #334).
+   счётчик бюджета, форма добавления и вопросы гостей без ответа (§7 п. 3, #334;
+   только при ENABLE_UNANSWERED_QUESTIONS, #1161).
    Контекст — knowledge.build_knowledge_context.
    Контракт селекторов knowledge.js: data-endpoint / data-fact-form (+data-mode
    add|update, +data-topic у правки) / data-fact (+data-topic) / data-action
@@ -84,6 +85,7 @@
   </form>
 </section>
 
+{% if show_unanswered %}
 <section class="card page-section">
   <h2 class="section-title">Гости спрашивали, а ответа не было</h2>
   <p class="hint">За последние 7 дней. Добавьте ответ — и бот перестанет отвечать «не знаю».</p>
@@ -103,6 +105,7 @@
   </div>
   {% endif %}
 </section>
+{% endif %}
 <p><a class="btn btn-quiet" href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/knowledge.js?v={{ knowledge_js_version }}" defer></script>
 {% endblock %}

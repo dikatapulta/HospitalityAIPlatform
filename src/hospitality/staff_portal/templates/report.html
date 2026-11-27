@@ -109,11 +109,13 @@
 </section>
 {% endif %}
 
+{% if unanswered %}
 <section class="page-section">
   <h2 class="section-title">Вопросы гостей без ответа</h2>
   <div class="card report-line"><b>{{ unanswered.value }}</b><span class="report-prev">было {{ unanswered.previous }}</span></div>
   <p class="hint">{% if unanswered.value == "—" or unanswered.previous == "—" %}— {{ unanswered.note }}. {% endif %}Сами вопросы — в <a href="{{ knowledge_path }}">«Справочнике отеля»</a>.</p>
 </section>
+{% endif %}
 </div>
 <script src="/staff/static/report.js?v={{ report_js_version }}" defer></script>
 {% endblock %}
