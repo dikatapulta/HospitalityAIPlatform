@@ -40,9 +40,11 @@ idle)
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" journal "работа" "сделано" "ничего"
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" idle
     ;;
-claimed:*) # взять номер и выйти с кодом 0: released — отпустив его, как в шаге 5, left — бросив (#1167)
+claimed:*) # номер и выход с кодом 0; released — отпустив его (шаг 5), left — бросив (#1167)
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" slot >/dev/null
-    if [ "${mode#claimed:}" = released ]; then POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" release >/dev/null; fi
+    if [ "${mode#claimed:}" = released ]; then
+        POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" release >/dev/null
+    fi
     exit 0
     ;;
 limit) echo "You've hit your session limit · resets 3:45pm"; exit 1 ;;
