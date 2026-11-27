@@ -3,7 +3,7 @@
 # доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
 # ops/pool-merge.sh, вердикт ревью и постановка в очередь — ops/pool-verdict.sh, свои авторы —
 # ops/pool-trust.sh, «занять номер» — ops/pool-reserve.sh, сторож безголовых окон —
-# ops/pool-spawn.sh, ops/pool-spawn-work.sh и ops/pool-spawn-ctl.sh, надзор за воркером
+# ops/pool-spawn.sh, ops/pool-spawn-reap.sh, ops/pool-spawn-work.sh и ops/pool-spawn-ctl.sh, надзор за воркером
 # и сторожем — ops/pool-supervise.sh, чистка копий — ops/pool-clean.sh (подключаются ниже). Шаги окна и окна-диспетчера — docs/QUEUE.md,
 # раздел «Пул окон».
 #
@@ -416,6 +416,8 @@ cmd_wait() {
 . "$(dirname "$0")/pool-reserve.sh"
 # shellcheck source=ops/pool-spawn.sh
 . "$(dirname "$0")/pool-spawn.sh"
+# shellcheck source=ops/pool-spawn-reap.sh
+. "$(dirname "$0")/pool-spawn-reap.sh"
 # shellcheck source=ops/pool-spawn-work.sh
 . "$(dirname "$0")/pool-spawn-work.sh"
 # shellcheck source=ops/pool-spawn-ctl.sh
