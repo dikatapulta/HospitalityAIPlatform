@@ -7,6 +7,7 @@ outlook по Fake-адаптеру — `tests/test_stay_extension_block.py`: а�
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -139,7 +140,8 @@ async def test_extension_evals_plumbing_on_fake_provider(canonical_database: Non
 
     system = provider.calls[0].system or ""
     full_night = departure + timedelta(days=1)
-    assert f"Nights with NO free rooms: {full_night.day}–" in system
+    # Ночь на стыке месяцев — «30 November–1 December»: после дня пробел, а не «–».
+    assert re.search(rf"Nights with NO free rooms: {full_night.day}[– ]", system)
     assert len(evals.SCENARIOS) == 30
     assert evals._check(full, turns[0])[0] is True
     assert evals._check(unasked, turns[1])[0] is False
