@@ -904,9 +904,14 @@ Telegram-чата персонала (issue #1050). Гость получил «
 
 1. **ЧП — сразу позвонить на ресепшен отеля:** «Гость написал в чат о ЧП, бот попросил
    его позвонить вам. Он позвонил?» Номер комнаты — в «Диалогах» кабинета (вход менеджера
-   или ресепшена) по времени алерта. Раздела нет — `conversation_id` из лога app:
-   `docker compose -f /home/deploy/hospitality-pilot/docker-compose.staging.yml logs --since 1h app | grep emergency_intercepted`
-   (у остальных причин — `grep escalation_without_staff`).
+   или ресепшена) по времени алерта. Раздела нет (на копии он выключен) — из базы, psql
+   из шага 2:
+   `SELECT occurred_at, payload->>'room_number' FROM outbox_events WHERE event_name = 'conversation.escalated' AND payload->>'reason' = 'emergency' AND occurred_at > now() - interval '1 hour' ORDER BY 1;`
+   (у остальных причин — без условия на `reason`, причина — `payload->>'reason'`). Без psql —
+   по логу app: `docker compose -f /home/deploy/hospitality-pilot/docker-compose.staging.yml logs --since 1h app | grep emergency_intercepted`
+   (у остальных причин — `grep escalation_without_staff`), из строки — `correlation_id`, затем
+   `grep <correlation_id>` того же лога: в строке `http_request` путь `/g/<отель>/<комната>/messages`
+   (веб-чат). Пустая комната — гость пишет без привязки к номеру: остаётся звонок на ресепшен.
 2. Почему некого звать — конфиг отеля. Из каталога копии `/home/deploy/hospitality-pilot`
    psql: `docker compose -f docker-compose.staging.yml --env-file .env exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`,
    в нём `SELECT slug, config->>'escalation_category_key', config->>'escalation_telegram_only' FROM tenants;`
