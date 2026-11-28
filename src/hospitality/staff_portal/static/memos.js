@@ -8,7 +8,8 @@
  *     подтверждения; «Отправить руководителю», «Отозвать», «на основе» — POST без него.
  *   Печать (memo_print.html): «Печать / сохранить в PDF» — window.print().
  *   Объяснительная (PR 5б): черновик, «Дополнить» и «Подать» — как черновик записки;
- *     требование — «Получил(а)» окном подтверждения, «Затребовать объяснение» — фото multipart.
+ *     требование — «Получил(а)» окном подтверждения, «Отозвать требование» — POST без него,
+ *     «Затребовать объяснение» — фото multipart.
  * Тексты — data-msg-*; всё — textContent, разметки в JS нет.
  */
 (function () {
@@ -204,6 +205,24 @@
       var status = await window.NecturnMemoConfirm.run(path, { kind: "receive" });
       if (status) { window.location.reload(); return; }
       receive.disabled = false;
+    });
+  }
+
+  /* «Отозвать требование» (затребовавшему до «Получил(а)», #1201): POST без окна подтверждения. */
+  var cancelDemand = demand && demand.querySelector("[data-demand-cancel]");
+  if (cancelDemand) {
+    var dstat = demand.querySelector("[data-demand-status]");
+    cancelDemand.addEventListener("click", async function () {
+      if (!window.confirm(cancelDemand.dataset.confirm)) return;
+      cancelDemand.disabled = true;
+      show(dstat, "");
+      try {
+        var done = await post(demand.dataset.api, "/" + demand.dataset.demandId + "/cancel");
+        window.location.assign(done.href);
+      } catch (error) {
+        show(dstat, error.code === "ERR-MEMO-002" ? demand.dataset.msgChanged : demand.dataset.msgFailed);
+        cancelDemand.disabled = false;
+      }
     });
   }
 

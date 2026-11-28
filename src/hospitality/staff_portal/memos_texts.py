@@ -135,6 +135,7 @@ PUSH_SIGN: Final = "Служебная записка ждёт вашей под
 PUSH_RECEIVED: Final = "Вам поступила служебная записка"
 PUSH_DECIDED: Final = "По вашей записке принято решение"
 PUSH_DEMAND: Final = "Вам вручено требование о письменном объяснении — откройте кабинет"
+PUSH_DEMAND_CANCELLED: Final = "Требование о письменном объяснении отозвано"
 PUSH_EXPLANATION: Final = "Подана объяснительная"
 
 # Вид записи (§2, §6): фильтр реестра и шапка печати.
@@ -218,6 +219,12 @@ DEMAND_EXPLAINED: Final = "Объяснение подано."
 RECEIVED_LINE: Final = "Получение: {method}"
 RECEIPT_MISMATCH: Final = "подтверждение не сходится с нынешним требованием, {when}"
 RECEIVE_BUTTON: Final = "Получил(а)"
+# Отзыв до «Получил(а)» (#1201; тексты — основателю через диспетчера 28.11).
+CANCEL_DEMAND_BUTTON: Final = "Отозвать требование"
+CANCEL_DEMAND_CONFIRM: Final = (
+    "Отозвать требование? Оно удалится вместе с фото, у сотрудника пропадёт из «Ждут меня». "
+    "Нужно другое — затребуйте заново."
+)
 WRITE_EXPLANATION: Final = "Написать объяснительную"
 EXPLANATION_SUBMITTED: Final = "подана {when}"
 EXPLANATION_LATE: Final = "после срока"

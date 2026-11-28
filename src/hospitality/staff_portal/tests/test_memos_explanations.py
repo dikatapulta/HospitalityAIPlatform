@@ -7,7 +7,9 @@
 «Ждут меня» её нет; после срока — отметка; «Дополнить» — новая запись со ссылкой. Без
 требования — примечание адресату. Права: `staff` не требует (страница — 404, загрузка —
 403), `senior` — только у своих служб, и форма предлагает только их. Поиск находит
-требование по имени, а условие на статус его не берёт.
+требование по имени, а условие на статус его не берёт. «Отозвать требование» — только
+затребовавшему до «Получил(а)», сотруднику — пуш об отзыве; строка получения называет сброс
+пароля, как лист подписей (#1201).
 """
 
 # ruff: noqa: F811
@@ -25,8 +27,9 @@ from httpx import AsyncClient
 from hospitality.modules.memos import api as memos_api
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.platform.staff_confirm import ConfirmationMethod, ProofStatus
 from hospitality.shared.ports.file_storage import FileStoragePort
-from hospitality.staff_portal import memos_search
+from hospitality.staff_portal import memos_demands, memos_search
 from hospitality.staff_portal import memos_texts as texts
 from hospitality.staff_portal.tests.conftest import PortalHotel
 from hospitality.staff_portal.tests.test_memos_screens import (
@@ -277,3 +280,77 @@ def test_search_finds_demand_by_name_not_by_status() -> None:
     assert not found(where(who="Дана")) and not found(where(kind=memos_api.MemoKind.MEMO))
     assert not found(where(status=memos_api.MemoStatus.SUBMITTED))
     assert not found(where(text="ОБ-")) and not found(where(until=date(2026, 11, 9)))
+
+
+async def test_demander_cancels_demand_before_receipt_over_http(
+    stand: dict[str, AsyncClient],
+    portal_hotel: PortalHotel,
+    fake_push: RecordingPush,
+    fake_file_storage: FileStoragePort,
+) -> None:
+    await _hotel(portal_hotel.tenant_id)
+    employee, boss = stand["author"], stand["boss"]
+    employee_id = await _member(employee, portal_hotel, EMPLOYEE)
+    await _member(boss, portal_hotel, BOSS, StaffRole.MANAGER)
+    employee_phone = await _phone(portal_hotel.tenant_id, employee_id)
+    demand_id = await _demand(boss, employee_id)
+    page = f"{MEMOS}/demands/{demand_id}"
+    assert texts.CANCEL_DEMAND_BUTTON in (await boss.get(page)).text
+    assert texts.CANCEL_DEMAND_BUTTON not in (await employee.get(page)).text
+
+    cancel = f"{API}/demands/{demand_id}/cancel"
+    assert (await employee.post(cancel, json={}, headers=SAME_ORIGIN)).status_code == 404
+    assert (await boss.post(cancel, json={})).status_code == 403  # без Origin — щит CSRF
+    done = await boss.post(cancel, json={}, headers=SAME_ORIGIN)
+    assert done.status_code == 200 and done.json()["href"].endswith("/memos/mine")
+    pushes = _pushes(fake_push, employee_phone)
+    assert [push["body"] for push in pushes] == [texts.PUSH_DEMAND, texts.PUSH_DEMAND_CANCELLED]
+    assert pushes[1]["url"].endswith("/memos/waiting")
+    assert (await employee.get(page)).status_code == 404
+    assert texts.DEMAND_TITLE not in (await employee.get(MEMOS)).text
+
+    received = await _demand(boss, employee_id)
+    await _received(employee, received)
+    assert texts.CANCEL_DEMAND_BUTTON not in (await boss.get(f"{MEMOS}/demands/{received}")).text
+    late = await boss.post(f"{API}/demands/{received}/cancel", json={}, headers=SAME_ORIGIN)
+    assert late.status_code == 409 and late.json()["error"]["code"] == "ERR-MEMO-002"
+
+
+def test_receipt_line_names_password_reset_like_the_sheet() -> None:
+    """Строка получения требования — те же особые случаи сброса пароля, что у листа (§4)."""
+    zone = ZoneInfo("Asia/Almaty")
+    reset = datetime(2026, 11, 10, 6, 0, tzinfo=UTC)
+    card = memos_api.DemandCard(
+        id=uuid.uuid4(),
+        demanded_by_id=uuid.uuid4(),
+        employee_id=uuid.uuid4(),
+        created_at=reset,
+        received_at=datetime(2026, 11, 11, 9, 5, tzinfo=UTC),
+        due_at=None,
+        state=memos_api.DemandState.OPEN,
+        received_method=ConfirmationMethod.PASSWORD,
+        received_proof_status=ProofStatus.PASSWORD_ONLY,
+        received_password_reset_at=reset,
+        explanations=[],
+    )
+    when = "11.11.2026 14:05"
+    assert memos_demands.receipt_line(card, zone) == (
+        f"Получение: подтверждено паролем кабинета, {when}; пароль перед этим сбрасывали 10.11.2026"
+    )
+    by_key = card.model_copy(
+        update={
+            "received_method": ConfirmationMethod.PASSKEY,
+            "received_proof_status": ProofStatus.VERIFIED,
+            "received_password_reset_at": None,
+            "received_key_reset_revoked_at": datetime(2026, 11, 12, 6, 0, tzinfo=UTC),
+            "received_key_bound_after_reset_at": reset,
+        }
+    )
+    assert memos_demands.receipt_line(by_key, zone) == (
+        "Получение: подтверждено с устройства, которое потом отвязал сброс пароля 12.11.2026, "
+        f"{when}; устройство привязано после сброса пароля 10.11.2026"
+    )
+    mismatch = by_key.model_copy(update={"received_proof_status": ProofStatus.MISMATCH})
+    assert memos_demands.receipt_line(mismatch, zone) == (
+        f"Получение: подтверждение не сходится с нынешним требованием, {when}"
+    )

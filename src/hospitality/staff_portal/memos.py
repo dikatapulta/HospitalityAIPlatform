@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 from typing import Any, Final
 
 from fastapi import HTTPException
@@ -31,6 +31,7 @@ from hospitality.platform import staff_auth, staff_passkeys
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.platform.staff_confirm import ConfirmationMethod, ProofStatus
 from hospitality.shared.config import get_settings
 from hospitality.staff_portal import ai_consent, memos_texts, queue
 from hospitality.staff_portal.ai_consent import AiSection
@@ -112,6 +113,43 @@ def format_on(staff: StaffContext) -> bool:
     """Кнопка «Оформить» (§7): модель назначения `memos` задана на деплойменте и у автора
     есть отметка согласия на Anthropic (spec 0082); действие проверяет то же само."""
     return bool(get_settings().llm_model_memos) and ai_consent.has(staff, AiSection.MEMO_FORMAT)
+
+
+def confirmation_line(  # noqa: PLR0913 — поля доказательства, у листа и у требования свои
+    confirmed_at: datetime,
+    method: ConfirmationMethod,
+    status: ProofStatus | None,
+    *,
+    password_reset_at: datetime | None,
+    key_reset_revoked_at: datetime | None,
+    key_bound_after_reset_at: datetime | None,
+    mismatch: str,
+    zone: tzinfo,
+) -> str:
+    """Способ подтверждения — одними словами у строки листа подписей и у получения
+    требования (§9, §4), с особыми случаями ключа и пароля: сбросить пароль мог
+    руководитель, и строка обязана это назвать (#1201). `mismatch` — текст «не сходится»."""
+    when = format_local(confirmed_at, zone)
+
+    def day(moment: datetime) -> str:
+        return format_local(moment, zone)[:10]
+
+    if method is ConfirmationMethod.PASSWORD:
+        line = memos_texts.BY_PASSWORD.format(when=when)
+        if password_reset_at is not None:
+            line += "; " + memos_texts.PASSWORD_WAS_RESET.format(day=day(password_reset_at))
+        return line
+    if status is ProofStatus.DISOWNED:
+        line = memos_texts.BY_DISOWNED.format(when=when)
+    elif status is not ProofStatus.VERIFIED:
+        return mismatch.format(when=when)
+    elif key_reset_revoked_at is not None:
+        line = memos_texts.BY_RESET_REVOKED.format(day=day(key_reset_revoked_at), when=when)
+    else:
+        line = memos_texts.BY_DEVICE.format(when=when)
+    if key_bound_after_reset_at is not None:
+        line += "; " + memos_texts.KEY_AFTER_RESET.format(day=day(key_bound_after_reset_at))
+    return line
 
 
 def manages_templates(staff: StaffContext) -> bool:

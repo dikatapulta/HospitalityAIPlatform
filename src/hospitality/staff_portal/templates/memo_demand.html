@@ -1,8 +1,9 @@
 {# Требование объяснения (spec 0077 §6, §9; #936, PR 5б). Контекст — memos_demands.page_context:
    кто и у кого, фото подписанного требования, состояние текстом для своей стороны, строка
    получения, объяснительные по нему. Контракт селекторов static/memos.js: [data-memo-demand]
-   (data-demand-id), [data-demand-receive], [data-demand-status]. «Получил(а)» — через окно
-   подтверждения (_memo_confirm.html), как подпись в листе. #}
+   (data-demand-id, data-api, data-msg-*), [data-demand-receive], [data-demand-cancel]
+   (data-confirm), [data-demand-status]. «Получил(а)» — через окно подтверждения
+   (_memo_confirm.html), как подпись в листе; «Отозвать требование» — POST без него (#1201). #}
 {% extends "layout.html" %}
 {% block title %}{{ title }} — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
@@ -11,7 +12,8 @@
 {% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
 {% block content %}
 {% include "_memo_tabs.html" %}
-<article class="memo-card" data-memo-demand data-demand-id="{{ demand_id }}">
+<article class="memo-card" data-memo-demand data-demand-id="{{ demand_id }}" data-api="{{ api }}"
+         {% for key, text in cancel_messages.items() %}data-msg-{{ key }}="{{ text }}" {% endfor %}>
   <section class="card memo-block">
     <h1 class="memo-title">{{ title }}</h1>
     <p class="hint">Затребовал(а): {{ demanded_by }} · Сотрудник: {{ employee }} · {{ created }}</p>
@@ -20,6 +22,7 @@
     <div class="request-actions">
       {% if can_receive %}<button type="button" class="btn btn-primary" data-demand-receive>{{ receive_button }}</button>{% endif %}
       {% if write_href %}<a class="btn btn-primary" href="{{ write_href }}">{{ write_button }}</a>{% endif %}
+      {% if can_cancel %}<button type="button" class="btn btn-ghost" data-demand-cancel data-confirm="{{ cancel_confirm }}">{{ cancel_button }}</button>{% endif %}
     </div>
     <p class="hint hint-alert" data-demand-status role="status" hidden></p>
   </section>

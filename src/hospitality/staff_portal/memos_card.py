@@ -21,7 +21,6 @@ from fastapi import HTTPException
 from hospitality.modules.memos import api as memos_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.platform.staff_confirm import ConfirmationMethod, ProofStatus
 from hospitality.staff_portal import memos_demands, memos_explanations, memos_search
 from hospitality.staff_portal import memos_texts as texts
 from hospitality.staff_portal.checkin import format_local
@@ -30,6 +29,7 @@ from hospitality.staff_portal.memos import (
     base_path,
     card_href,
     confirm_context,
+    confirmation_line,
     format_on,
     strokes_points,
     tabs_context,
@@ -125,26 +125,16 @@ def method_line(row: memos_api.SignatureRead, zone: tzinfo) -> str:
     """Способ подтверждения строки листа (§9, §4) — с особыми случаями ключа и пароля."""
     if row.signed_at is None or row.method is None:
         return ""
-    when = format_local(row.signed_at, zone)
-    if row.method is ConfirmationMethod.PASSWORD:
-        line = texts.BY_PASSWORD.format(when=when)
-        if row.password_reset_at is not None:
-            line += "; " + texts.PASSWORD_WAS_RESET.format(day=_day(row.password_reset_at, zone))
-        return line
-    if row.proof_status is not ProofStatus.VERIFIED and row.proof_status is not (
-        ProofStatus.DISOWNED
-    ):
-        return texts.BY_MISMATCH.format(when=when)
-    if row.proof_status is ProofStatus.DISOWNED:
-        line = texts.BY_DISOWNED.format(when=when)
-    elif row.key_reset_revoked_at is not None:
-        day = _day(row.key_reset_revoked_at, zone)
-        line = texts.BY_RESET_REVOKED.format(day=day, when=when)
-    else:
-        line = texts.BY_DEVICE.format(when=when)
-    if row.key_bound_after_reset_at is not None:
-        line += "; " + texts.KEY_AFTER_RESET.format(day=_day(row.key_bound_after_reset_at, zone))
-    return line
+    return confirmation_line(
+        row.signed_at,
+        row.method,
+        row.proof_status,
+        password_reset_at=row.password_reset_at,
+        key_reset_revoked_at=row.key_reset_revoked_at,
+        key_bound_after_reset_at=row.key_bound_after_reset_at,
+        mismatch=texts.BY_MISMATCH,
+        zone=zone,
+    )
 
 
 def sheet_rows(

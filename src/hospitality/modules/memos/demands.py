@@ -7,7 +7,8 @@
 WebP без метаданных, шифрование; модуль держит только id файла. Сотрудник жмёт
 «Получил(а)» с подтверждением (`staff_confirm`, как подпись в листе): это время
 получения, от него — срок (`deadline.py`). Доставка пуша и открытие страницы
-получением не считаются. В логах — id и способ подтверждения, без имён (§8).
+получением не считаются. До «Получил(а)» затребовавший может отозвать требование —
+оно удаляется с фото. В логах — id и способ подтверждения, без имён (§8).
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ from hospitality.platform.staff_confirm import (
     begin_confirmation,
     verify_proof,
 )
+from hospitality.platform.staff_passkey_history import passkey_history
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -95,6 +97,39 @@ async def create_demand(
         raise
     logger.info("memo_demand_created", demand_id=str(demand_id))
     return demand_id
+
+
+async def cancel_demand(staff: StaffContext, demand_id: uuid.UUID) -> uuid.UUID:
+    """«Отозвать требование» — затребовавшему, пока сотрудник не нажал «Получил(а)».
+
+    Ошибся сотрудником или фото — требование удаляется вместе с фото: у сотрудника
+    пропадает строка «Ждут меня», фото бумаги о чужом проступке у него не остаётся
+    (#1201). После получения отзыва нет — от получения идёт срок (ERR-MEMO-002);
+    сотруднику кнопки нет (ERR-MEMO-001). Сначала фото, потом строка (канон
+    `files.delete_expired_files`), под блокировкой строки: «Получил(а)» из другой
+    вкладки ждёт её и находит требование удалённым. Хранилище недоступно —
+    ERR-FILES-006, требование остаётся целым, повтор доделает. Вернуть — сотрудника:
+    ему пуш об отзыве (кабинет)."""
+    async with session_scope() as session:
+        demand = await load_demand(session, staff, demand_id, lock=True)
+        if demand.demanded_by_id != staff.user_id:
+            raise not_found()
+        if demand.received_at is not None:
+            raise wrong_state()
+        employee_id = demand.employee_id
+        await _delete_photo(demand.file_id)
+        await session.delete(demand)
+    logger.info("memo_demand_cancelled", demand_id=str(demand_id))
+    return employee_id
+
+
+async def _delete_photo(file_id: uuid.UUID) -> None:
+    # Фото уже нет (прошлая попытка удалила его, а строку — нет) — удалять нечего.
+    try:
+        await delete_file(file_id)
+    except AppError as exc:
+        if exc.code != ERR_FILE_NOT_FOUND:
+            raise
 
 
 def _require_receiver(demand: MemoDemand, staff: StaffContext) -> None:
@@ -183,12 +218,19 @@ async def get_demand(staff: StaffContext, demand_id: uuid.UUID) -> DemandCard:
         status = await verify_proof(
             demand_subject(demand), stored, signer_user_id=demand.employee_id
         )
+    # Особые случаи сброса пароля — те же, что у строки листа подписей (§4, `reading._signature`).
+    key = None
+    if stored is not None and stored.passkey_id is not None:
+        key = (await passkey_history([stored.passkey_id])).get(stored.passkey_id)
     sent = [memo.sent_at for memo in memos if memo.sent_at is not None]
     return DemandCard.model_validate(
         {
             **_summary_fields(demand, sent),
             "received_method": stored.method if stored else None,
             "received_proof_status": status,
+            "received_password_reset_at": stored.password_reset_at if stored else None,
+            "received_key_reset_revoked_at": key.reset_revoked_at if key else None,
+            "received_key_bound_after_reset_at": key.bound_after_reset_at if key else None,
             "explanations": [
                 DemandExplanation(
                     id=memo.id,
